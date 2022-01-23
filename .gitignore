@@ -1,0 +1,9 @@
+keys
+compiled-js
+node_modules
+\#*
+*~
+certs
+*.env
+*.config
+.idea

@@ -1,0 +1,8 @@
+version: '3.7'
+
+services:
+  dns-updater:
+    image: kernrj/water-stats-mqtt
+    restart: unless-stopped
+    init: true
+
