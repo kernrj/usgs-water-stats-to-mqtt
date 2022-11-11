@@ -17,9 +17,9 @@
     "@types/chai": "^4",
     "@types/mocha": "^9",
     "@types/node": "^16",
+    "@types/ws": "^8",
     "chai": "^4",
     "mocha": "^9",
-    "eslint": "^8",
-    "ws": "^8"
+    "eslint": "^8"
   }
 }
