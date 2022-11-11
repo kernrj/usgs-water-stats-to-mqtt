@@ -1,0 +1,4 @@
+WATER_MQTT_PASSWORD=<MQTT Password>
+WATER_MQTT_USERNAME=<MQTT Username>
+WATER_SITES=<Comma-separated list of water sites. For example: 01534500,01536000>
+WATER_MQTT_ENDPOINT=tcp://<HOST>:<PORT>
