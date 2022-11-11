@@ -16,7 +16,6 @@
 
 import util = require('swiss-cheese');
 import mqtt = require('mqtt');
-import {IClientPublishOptions} from 'mqtt/types/lib/client-options';
 
 const variableCodeLookup: any = Object.freeze({
                                                 '00060': {
@@ -56,12 +55,13 @@ const mqttEndpoint = util.getStringEnvOrDie('WATER_MQTT_ENDPOINT');
 const mqttUsername = util.getStringEnvOrDie('WATER_MQTT_USERNAME');
 const mqttPassword = util.getStringEnvOrDie('WATER_MQTT_PASSWORD');
 const mqttTopicBase = util.getStringEnv('WATER_MQTT_TOPIC_BASE', 'homeassistant/sensor');
+let exitRequested = false;
 
 const maxBodySize = 1024 * 1024;
-const updateAfterIntervalMs = 1000 * util.getNumericEnv('WATER_UPDATE_INTERVAL', 900);
+const updateAfterIntervalSeconds = util.getNumericEnv('WATER_UPDATE_INTERVAL', 900);
+let updateTimer: util.Timer;
 
-let updateInterval: NodeJS.Timeout;
-
+process.on('uncaughtException', handleUncaughtException);
 process.on('SIGTERM', stopAndExit);
 process.on('SIGINT', stopAndExit);
 
@@ -78,8 +78,33 @@ function parseIntList(commaSeparatedNumberString: string): number[] {
 }
 
 function stopAndExit(signal: string) {
+  if (exitRequested) {
+    log.i(`Got signal ${signal} after previous to stop. Stopping immediately.`);
+    process.exit(0);
+  }
+
   log.i(`Got signal ${signal}. Stopping.`);
-  process.exit(0);
+  if (util.isSet(updateTimer)) {
+    log.i('Interrupting main loop');
+    updateTimer.finishEarly();
+  } else {
+    log.i('Not interrupting main loop - not running');
+    process.exit(0);
+  }
+
+  if (util.isSet(mqttClient)) {
+    log.i('Stopping MQTT client.');
+    mqttClient.end();
+  } else {
+    log.i('MQTT client was not set. Not disconnecting.');
+  }
+
+  exitRequested = true;
+}
+
+function handleUncaughtException(e: Error): void {
+  log.e(`Uncaught exception '${e.message}': ${e.stack}`);
+  process.exit(1);
 }
 
 let mqttClient: mqtt.MqttClient;
@@ -93,28 +118,45 @@ async function start() {
       password: mqttPassword,
     });
 
-    return Promise.resolve();
-  }, null, 60000);
+    mqttClient.on('error', (error: Error) => {
+      log.e('MQTT error: ${error}');
+    });
 
+    return Promise.resolve();
+  }, null, 1000);
 
   log.i(`Logged into MQTT server ${mqttEndpoint}`);
 
-  while (true) {
+  while (!exitRequested) {
+    updateTimer = util.createTimer(updateAfterIntervalSeconds);
     await updateStats();
-    await util.waitFor(15 * 60);
+
+    if (exitRequested) {
+      log.i('Exit requested. Breaking out of main loop.');
+      break;
+    }
+
+    await updateTimer.waitForTimeout();
   }
+
+  log.i('Main loop exited.');
 }
 
 async function updateStats() {
   const parsedWaterEndpointUrl = new URL(waterApiEndpoint);
 
+  const retryCount = 2;
+  const retryIntervalInSeconds = 5;
+  const response = await util.runWithRetry(async () => {
+    return await util.httpMakeRequest({
+                                        protocol: parsedWaterEndpointUrl.protocol,
+                                        hostname: parsedWaterEndpointUrl.hostname,
+                                        port: parsedWaterEndpointUrl.port,
+                                        path: `${parsedWaterEndpointUrl.pathname}?format=json,1.1&site=${siteIds}`,
+                                      }, '');
+  }, retryCount, retryIntervalInSeconds);
   log.i(`Fetching water data`);
-  const response = await util.httpMakeRequest({
-                                                protocol: parsedWaterEndpointUrl.protocol,
-                                                hostname: parsedWaterEndpointUrl.hostname,
-                                                port: parsedWaterEndpointUrl.port,
-                                                path: `${parsedWaterEndpointUrl.pathname}?format=json,1.1&site=${siteIds}`,
-                                              }, '');
+
   const body: string = await util.readStreamAsString(response.responseBodyStream, maxBodySize);
   const json: any = JSON.parse(body);
   const timeSeries: any[] = json.value.timeSeries;
@@ -123,7 +165,12 @@ async function updateStats() {
   log.i(`USGS Data: ${JSON.stringify(json, null, 2)}`);
   log.i(`Publishing water data to MQTT`);
 
-  const promises: Promise<mqtt.Packet>[] = [];
+  interface PromiseInfo {
+    name: String;
+    promise: Promise<mqtt.Packet>;
+  }
+
+  const promises: Promise<any>[] = [];
 
   for (let i = 0; i < timeSeries.length; i++) {
     const entry = timeSeries[i];
@@ -152,22 +199,23 @@ async function updateStats() {
       unitOfMeasurement));
 
     const geolocation = entry.sourceInfo.geoLocation.geogLocation;
-    promises.push(publishMqtt(mqttClient, getAttributesTopic(siteId), {
-      latitude: geolocation.latitude,
-      longitude: geolocation.longitude,
-      datum: geolocation.srs,
-    }, {
-      retain: true
-    }));
+    promises.push(publishMqtt(
+      mqttClient,
+      getAttributesTopic(siteId),
+      {
+        latitude: geolocation.latitude,
+        longitude: geolocation.longitude,
+        datum: geolocation.srs,
+      }, {
+        retain: true,
+      }));
   }
 
   util.forEachOwned(publishData, (siteId: string, publishSiteData: any) => {
-    promises.push(publishMqtt(mqttClient, getStateTopic(siteId), publishSiteData, { retain: true }));
+    promises.push(publishMqtt(mqttClient, getStateTopic(siteId), publishSiteData, {retain: true}));
   });
 
-  await Promise.all(promises);
-
-  log.i(`Published to MQTT`);
+  return Promise.all(promises);
 }
 
 function getConfigTopic(siteId: string, variable: string): string {
@@ -179,7 +227,7 @@ function getStateTopic(siteId: string): string {
 }
 
 function getAttributesTopic(siteId: string): string {
-  return `${mqttTopicBase}/${siteId}/attributes`;
+  return `${mqttTopicBase} /${siteId}/attributes`;
 }
 
 async function publishHomeAssistantDiscoveryMessage(
@@ -220,8 +268,7 @@ async function publishMqtt(
   log.i(`Publishing mqtt topic '${topic}': ${JSON.stringify(message, null, 2)}`);
 
   return new Promise<mqtt.Packet>((resolve, reject) => {
-
-    mqttClient.publish(
+    client.publish(
       topic,
       JSON.stringify(message),
       options,
@@ -235,4 +282,11 @@ async function publishMqtt(
   });
 }
 
-start();
+start()
+  .catch(reason => {
+    log.e(`Killing process due to error: ${reason}`);
+    process.exit(1);
+  })
+  .then(() => {
+    log.i('Water stats updater exiting.');
+  });
