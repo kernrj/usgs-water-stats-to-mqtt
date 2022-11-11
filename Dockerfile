@@ -1,4 +1,4 @@
-FROM ubuntu:20.04 as Base
+FROM ubuntu:22.04 as Base
 
 COPY .nvmrc /app/
 COPY package.json /app/
