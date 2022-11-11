@@ -1,7 +1,7 @@
 version: '3.7'
 
 services:
-  dns-updater:
+  water-stats-updater:
     image: kernrj/usgs-water-stats-to-mqtt
     restart: unless-stopped
     init: true
