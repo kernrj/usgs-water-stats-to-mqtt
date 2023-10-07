@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 as Base
+FROM ubuntu:22.04 as base
 
 COPY .nvmrc /app/
 COPY package.json /app/
@@ -15,7 +15,7 @@ RUN apt-get update -y \
     && nvm install \
     && apt-get remove --autoremove -y curl
 
-FROM Base as CompiledJavascript
+FROM base as compiled_javascript
 
 COPY src /app/src
 COPY tsconfig.json /app/
@@ -28,9 +28,9 @@ RUN cd /app \
     && npm install \
     && node_modules/typescript/bin/tsc
 
-FROM Base
+FROM base
 
-COPY --from=CompiledJavascript /app/compiled-js/* /app/src/
+COPY --from=compiled_javascript /app/compiled-js/* /app/src/
 COPY package.json /app/
 COPY start-docker.sh /app/
 COPY .nvmrc /app/
