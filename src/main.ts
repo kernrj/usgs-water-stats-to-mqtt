@@ -155,12 +155,19 @@ async function updateStats() {
                                         path: `${parsedWaterEndpointUrl.pathname}?format=json,1.1&site=${siteIds}`,
                                       }, '');
   }, retryCount, retryIntervalInSeconds);
-  log.i(`Fetching water data`);
+  log.i('Fetching water data');
 
+  const timeout = setTimeout(() => {
+    log.e('Failed to fetch data');
+  }, 60000);
   const body: string = await util.readStreamAsString(response.responseBodyStream, maxBodySize);
+  clearTimeout(timeout);
+
   const json: any = JSON.parse(body);
   const timeSeries: any[] = json.value.timeSeries;
   const publishData: any = {};
+
+  util.requireArray(timeSeries, 'timeSeries');
 
   log.i(`USGS Data: ${JSON.stringify(json, null, 2)}`);
   log.i(`Publishing water data to MQTT`);
@@ -174,6 +181,8 @@ async function updateStats() {
 
   for (let i = 0; i < timeSeries.length; i++) {
     const entry = timeSeries[i];
+    util.requireNumber(entry, 'timeSeries entry');
+
     const value: number = util.parseNumberOr(entry.values[0].value[0].value, undefined);
     const timestamp: string = entry.values[0].value[0].dateTime;
     const unitOfMeasurement: string = entry.variable.unit.unitCode;
