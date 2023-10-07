@@ -181,7 +181,6 @@ async function updateStats() {
 
   for (let i = 0; i < timeSeries.length; i++) {
     const entry = timeSeries[i];
-    util.requireNumber(entry, 'timeSeries entry');
 
     const value: number = util.parseNumberOr(entry.values[0].value[0].value, undefined);
     const timestamp: string = entry.values[0].value[0].dateTime;
